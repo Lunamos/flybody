@@ -25,6 +25,7 @@ from flybody.tasks.trajectory_loaders import (
     InferenceWalkingTrajectoryLoader,
     InferenceFlightTrajectoryLoader,
 )
+from flybody.tasks.mixed_locomotion import MixedLocomotionImitation
 
 
 def flight_imitation(ref_path: str | None = None,
@@ -36,7 +37,8 @@ def flight_imitation(ref_path: str | None = None,
                      joint_filter: float = 0.,
                      future_steps: int = 5,
                      random_state: np.random.RandomState | None = None,
-                     terminal_com_dist: float = 2.0):
+                     terminal_com_dist: float = 2.0,
+                     unified_action_space: bool = False):
     """Requires a fruitfly to track a flying reference.
   
     Args:
@@ -79,6 +81,10 @@ def flight_imitation(ref_path: str | None = None,
         traj_generator = InferenceFlightTrajectoryLoader()
     # Build the task.
     time_limit = 0.6
+    inactive_classes = None
+    if unified_action_space:
+        disable_legs = False
+        inactive_classes = ('legs', 'adhesion')
     task = FlightImitationWBPG(walker=walker,
                                arena=arena,
                                wbpg=wbpg,
@@ -89,7 +95,8 @@ def flight_imitation(ref_path: str | None = None,
                                disable_legs=disable_legs,
                                time_limit=time_limit,
                                joint_filter=joint_filter,
-                               future_steps=future_steps)
+                               future_steps=future_steps,
+                               inactive_action_classes=inactive_classes)
 
     return composer.Environment(time_limit=time_limit,
                                 task=task,
@@ -103,7 +110,8 @@ def walk_imitation(ref_path: str | None = None,
                    traj_indices: Sequence[int] | None = None,
                    random_state: np.random.RandomState | None = None,
                    terminal_com_dist: float = 0.3,
-                   joint_filter: float = 0.01):
+                   joint_filter: float = 0.01,
+                   unified_action_space: bool = False):
     """Requires a fruitfly to track a reference walking fly.
 
     Args:
@@ -136,6 +144,10 @@ def walk_imitation(ref_path: str | None = None,
         traj_generator = InferenceWalkingTrajectoryLoader()
     # Build a task that rewards the agent for tracking a walking ghost.
     time_limit = 10.0
+    inactive_classes = None
+    if unified_action_space:
+        disable_wings = False
+        inactive_classes = ('wings',)
     task = WalkImitation(walker=walker,
                          arena=arena,
                          traj_generator=traj_generator,
@@ -147,7 +159,8 @@ def walk_imitation(ref_path: str | None = None,
                          disable_wings=disable_wings,
                          joint_filter=joint_filter,
                          future_steps=64,
-                         time_limit=time_limit)
+                         time_limit=time_limit,
+                         inactive_action_classes=inactive_classes)
 
     return composer.Environment(time_limit=time_limit,
                                 task=task,
@@ -185,6 +198,86 @@ def walk_on_ball(force_actuators: bool = False,
                       adhesion_filter=0.007,
                       time_limit=time_limit)
 
+    return composer.Environment(time_limit=time_limit,
+                                task=task,
+                                random_state=random_state,
+                                strip_singleton_obs_buffer_dim=True)
+
+
+def mixed_locomotion_imitation(walk_ref_path: str,
+                               flight_ref_path: str,
+                               wpg_pattern_path: str | None = None,
+                               walk_traj_indices: Sequence[int] | None = None,
+                               flight_traj_indices: Sequence[int] | None = None,
+                               walk_phase_duration: float = 2.0,
+                               flight_phase_duration: float = 0.6,
+                               force_actuators: bool = False,
+                               joint_filter: float = 0.01,
+                               terminal_com_dist: float = 0.4,
+                               mode_control: bool = True,
+                               future_steps: int = 32,
+                               random_state: np.random.RandomState | None = None):
+    """Environment where a single policy alternates between walking and flight.
+
+    Args:
+        walk_ref_path: Path to the walking HDF5 reference dataset.
+        flight_ref_path: Path to the flight HDF5 reference dataset.
+        wpg_pattern_path: Optional WBPG baseline pattern file.
+        walk_traj_indices: Optional subset of walking trajectories to use.
+        flight_traj_indices: Optional subset of flight trajectories to use.
+        walk_phase_duration: Duration of the walking segment in seconds.
+        flight_phase_duration: Duration of the flight segment in seconds.
+        force_actuators: Whether to use force or position actuators.
+        joint_filter: Joint actuator filter time constant.
+        terminal_com_dist: Termination distance for CoM tracking.
+        mode_control: Whether to expose an additional user action for switching
+            between walking and flight.
+        future_steps: Number of future reference steps exposed as observables.
+        random_state: Optional random state for reproducibility.
+
+    Returns:
+        Composer environment implementing the mixed locomotion task.
+    """
+
+    if walk_ref_path is None or flight_ref_path is None:
+        raise ValueError('Both walking and flight reference datasets are required '
+                         'for the mixed locomotion task.')
+
+    walker = fruitfly.FruitFly
+    arena = floors.Floor()
+
+    wbpg = WingBeatPatternGenerator(base_pattern_path=wpg_pattern_path)
+    walk_loader = HDF5WalkingTrajectoryLoader(
+        path=walk_ref_path,
+        traj_indices=walk_traj_indices,
+        random_state=random_state,
+    )
+    flight_loader = HDF5FlightTrajectoryLoader(
+        path=flight_ref_path,
+        traj_indices=flight_traj_indices,
+        randomize_start_step=False,
+        random_state=random_state,
+    )
+
+    task = MixedLocomotionImitation(
+        walker=walker,
+        arena=arena,
+        walk_traj_generator=walk_loader,
+        flight_traj_generator=flight_loader,
+        wbpg=wbpg,
+        mocap_joint_names=walk_loader.get_joint_names(),
+        mocap_site_names=walk_loader.get_site_names(),
+        walk_phase_duration=walk_phase_duration,
+        flight_phase_duration=flight_phase_duration,
+        terminal_com_dist=terminal_com_dist,
+        trajectory_sites=True,
+        mode_control=mode_control,
+        joint_filter=joint_filter,
+        force_actuators=force_actuators,
+        future_steps=future_steps,
+    )
+
+    time_limit = walk_phase_duration + flight_phase_duration
     return composer.Environment(time_limit=time_limit,
                                 task=task,
                                 random_state=random_state,
