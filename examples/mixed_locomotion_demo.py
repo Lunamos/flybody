@@ -230,6 +230,7 @@ def main():
     env = build_environment()
     data = rollout(env)
     output_path = os.path.join(REPO_ROOT, 'docs', 'images', 'mixed_demo.png')
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plot_results(data, output_path)
     print(f"Saved demo plot to {os.path.abspath(output_path)}")
 

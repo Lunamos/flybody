@@ -130,9 +130,9 @@ class MixedLocomotionImitation(FruitFlyTask):
         )
 
         # Pre-compute useful action indices.
-        self._wing_action_inds = tuple(self._walker._action_indices['wings'])
-        self._leg_action_inds = tuple(self._walker._action_indices['legs'])
-        self._adhesion_action_inds = tuple(
+        self._wing_action_inds = list(self._walker._action_indices['wings'])
+        self._leg_action_inds = list(self._walker._action_indices['legs'])
+        self._adhesion_action_inds = list(
             self._walker._action_indices.get('adhesion', ()))
         user_indices = self._walker._action_indices['user']
         self._freq_user_index = user_indices[0] if user_indices else None
@@ -409,7 +409,7 @@ class MixedLocomotionImitation(FruitFlyTask):
                 margin=4.,
                 value_at_margin=0.0,
             )
-            return (displacement, quat_dist, retract_legs)
+            return np.hstack((displacement, quat_dist, retract_legs))
 
         # Walking reward path.
         step = min(self._current_phase.step_in_phase,
@@ -438,7 +438,7 @@ class MixedLocomotionImitation(FruitFlyTask):
             margin=3.,
             value_at_margin=0.0,
         )
-        return tuple(np.hstack((reward_factors, retract_wings)))
+        return np.hstack((reward_factors, retract_wings))
 
     def check_termination(self, physics):
         step = round(physics.time() / self.control_timestep)

@@ -62,6 +62,23 @@ specialists:
 loaders, arena and generators so the environment can be instantiated alongside
 existing helpers.
 
+## Quick Test & Visualization
+
+To verify that the mixed task boots correctly without access to the proprietary
+HDF5 datasets, a synthetic demonstration script is provided. It generates a
+stitched walking/flying reference, runs the environment for one full cycle, and
+plots the centre-of-mass traces while highlighting the flight window:
+
+```bash
+python examples/mixed_locomotion_demo.py
+```
+
+The command writes `docs/images/mixed_demo.png`, reproduced below, which
+confirms that the ghost schedule switches from a grounded walking segment to an
+elevated flight segment within a single rollout.
+
+![Mixed locomotion reference walkthrough](images/mixed_demo.png)
+
 ## XML Considerations
 
 No MuJoCo XML edits are required for the unified setup. When `unified_action_space`
