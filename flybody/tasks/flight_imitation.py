@@ -1,6 +1,8 @@
 """Flight imitation task."""
 # ruff: noqa: F821
 
+from typing import Sequence
+
 import numpy as np
 from dm_control.utils import rewards
 
@@ -21,6 +23,7 @@ class FlightImitationWBPG(Flying):
                  traj_generator: HDF5FlightTrajectoryLoader,
                  terminal_com_dist: float = 2.0,
                  trajectory_sites: bool = True,
+                 inactive_action_classes: Sequence[str] | None = None,
                  **kwargs):
         """Task of learning a policy for flying and maneuvering while using a
         wing beat pattern generator with controllable wing beat frequency.
@@ -31,6 +34,10 @@ class FlightImitationWBPG(Flying):
             terminal_com_dist: Episode will be terminated when CoM distance from
                 model to ghost exceeds terminal_com_dist.
             trajectory_sites: Whether to render trajectory sites.
+            inactive_action_classes: Optional iterable of walker action class
+                names (e.g. ``('legs', 'adhesion')``) that should be zeroed at
+                every step while still keeping their dimensions in the unified
+                action space.
             **kwargs: Arguments passed to the superclass constructor.
         """
 
@@ -41,6 +48,12 @@ class FlightImitationWBPG(Flying):
         self._terminal_com_dist = terminal_com_dist
         self._trajectory_sites = trajectory_sites
         self._next_traj_idx = None
+        self._inactive_action_indices: tuple[int, ...] = ()
+        if inactive_action_classes:
+            indices = []
+            for cls in inactive_action_classes:
+                indices.extend(self._walker._action_indices.get(cls, ()))
+            self._inactive_action_indices = tuple(sorted(set(indices)))
 
         # Add axis crosshair.
         self._crosshair_sites = []
@@ -156,6 +169,11 @@ class FlightImitationWBPG(Flying):
         length = physics.bind(self._wing_joints).qpos
         # Convert position control to force control.
         action[self._wing_inds_action] += (ctrl - length)
+
+        # Zero out inactive actuators to maintain a unified action space when
+        # legs or other appendages are physically disabled.
+        if self._inactive_action_indices:
+            action[list(self._inactive_action_indices)] = 0.0
 
         # Update ghost joint pos and vel.
         step = int(np.round(physics.data.time / self.control_timestep))
