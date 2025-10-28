@@ -27,6 +27,7 @@ class WalkImitation(Walking):
                  claw_friction: float | None = 1.0,
                  trajectory_sites: bool = True,
                  inference_mode: bool = False,
+                 inactive_action_classes: Sequence[str] | None = None,
                  **kwargs):
         """This task is a combination of imitation walking and ghost tracking.
 
@@ -41,6 +42,10 @@ class WalkImitation(Walking):
             trajectory_sites: Whether to render trajectory sites.
             inference_mode: Whether to run in test mode and skip full-body
                 reward calculation.
+            inactive_action_classes: Optional iterable of walker action class
+                names (e.g. ``('wings',)``) that should be zeroed each step to
+                keep the unified action space consistent while ignoring the
+                corresponding actuators for this task.
             **kwargs: Arguments passed to the superclass constructor.
         """
 
@@ -53,6 +58,12 @@ class WalkImitation(Walking):
         self._max_episode_steps = round(
             self._time_limit / self.control_timestep) + 1
         self._next_traj_idx = None
+        self._inactive_action_indices: tuple[int, ...] = ()
+        if inactive_action_classes:
+            indices = []
+            for cls in inactive_action_classes:
+                indices.extend(self._walker._action_indices.get(cls, ()))
+            self._inactive_action_indices = tuple(sorted(set(indices)))
 
         # Get mocap joints.
         self._mocap_joints = [self._root_joint]
@@ -146,6 +157,9 @@ class WalkImitation(Walking):
 
         # Protect from rare NaN actions.
         action[np.isnan(action)] = 0.
+
+        if self._inactive_action_indices:
+            action[list(self._inactive_action_indices)] = 0.0
 
         super().before_step(physics, action, random_state)
 
