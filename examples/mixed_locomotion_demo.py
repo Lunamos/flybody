@@ -6,14 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 
-# Ensure the repository root is importable and headless rendering is disabled.
+# -----------------------------------------------------------------------------
+# Repository setup & environment configuration
+# -----------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-os.environ.setdefault('MUJOCO_GL', 'disable')
+os.environ.setdefault("MUJOCO_GL", "egl")  # "egl" for GPU server, "osmesa" for CPU
 
 import matplotlib.pyplot as plt
 import numpy as np
+import imageio
 
 from dm_control import composer
 from dm_control.locomotion.arenas import floors
@@ -24,6 +27,9 @@ from flybody.tasks.pattern_generators import WingBeatPatternGenerator
 from flybody.tasks.synthetic_trajectories import constant_speed_trajectory
 
 
+# -----------------------------------------------------------------------------
+# Data structures
+# -----------------------------------------------------------------------------
 @dataclass
 class SyntheticWalkSnippet:
     qpos: np.ndarray
@@ -32,6 +38,9 @@ class SyntheticWalkSnippet:
     joint_quat: np.ndarray
 
 
+# -----------------------------------------------------------------------------
+# Synthetic Walking Generator
+# -----------------------------------------------------------------------------
 class SyntheticWalkingLoader:
     """Procedurally generates a short walking snippet for demonstrations."""
 
@@ -53,7 +62,7 @@ class SyntheticWalkingLoader:
                              dtype=np.float32)
         joint_quat = np.zeros((self._n_steps, len(self._mocap_joint_names), 4),
                               dtype=np.float32)
-        joint_quat[..., 0] = 1.0  # Identity orientation for all joints.
+        joint_quat[..., 0] = 1.0  # Identity quaternion for all joints.
 
         for step in range(self._n_steps):
             phase = 2 * math.pi * step / self._n_steps
@@ -65,7 +74,7 @@ class SyntheticWalkingLoader:
             swing = 0.35 * math.sin(phase)
             anti_swing = 0.35 * math.sin(phase + math.pi)
             for i, name in enumerate(self._mocap_joint_names):
-                offset = swing if 'left' in name else anti_swing
+                offset = swing if "left" in name else anti_swing
                 walk_qpos[step, 7 + i] = offset
                 walk_qvel[step, 6 + i] = 2 * math.pi * 0.35 * math.cos(phase)
 
@@ -76,12 +85,12 @@ class SyntheticWalkingLoader:
             joint_quat=joint_quat,
         )
 
-    def get_trajectory(self, traj_idx: int | None = None):  # pylint: disable=unused-argument
+    def get_trajectory(self, traj_idx: int | None = None):
         return {
-            'qpos': self._snippet.qpos,
-            'qvel': self._snippet.qvel,
-            'root2site': self._snippet.root2site,
-            'joint_quat': self._snippet.joint_quat,
+            "qpos": self._snippet.qpos,
+            "qvel": self._snippet.qvel,
+            "root2site": self._snippet.root2site,
+            "joint_quat": self._snippet.joint_quat,
         }
 
     def get_joint_names(self):
@@ -91,6 +100,9 @@ class SyntheticWalkingLoader:
         return self._mocap_site_names
 
 
+# -----------------------------------------------------------------------------
+# Synthetic Flight Generator
+# -----------------------------------------------------------------------------
 class SyntheticFlightLoader:
     """Reuse the constant-speed generator to mimic a take-off segment."""
 
@@ -106,10 +118,13 @@ class SyntheticFlightLoader:
         self._com_qpos = qpos
         self._com_qvel = qvel
 
-    def get_trajectory(self, traj_idx: int | None = None):  # pylint: disable=unused-argument
+    def get_trajectory(self, traj_idx: int | None = None):
         return self._com_qpos, self._com_qvel
 
 
+# -----------------------------------------------------------------------------
+# Custom Wing Beat Pattern Generator
+# -----------------------------------------------------------------------------
 class DemoWingBeat(WingBeatPatternGenerator):
     """Wing beat generator with deterministic phase for plotting."""
 
@@ -117,21 +132,24 @@ class DemoWingBeat(WingBeatPatternGenerator):
         return super().reset(initial_phase=initial_phase, return_qvel=return_qvel)
 
 
+# -----------------------------------------------------------------------------
+# Environment builder
+# -----------------------------------------------------------------------------
 def build_environment():
     walker = fruitfly.FruitFly
     arena = floors.Floor()
 
     mocap_joint_names = [
-        'coxa_abduct_T1_left', 'coxa_twist_T1_left', 'coxa_T1_left',
-        'femur_twist_T1_left', 'femur_T1_left', 'tibia_T1_left',
-        'tarsus_T1_left', 'coxa_abduct_T1_right', 'coxa_twist_T1_right',
-        'coxa_T1_right', 'femur_twist_T1_right', 'femur_T1_right',
-        'tibia_T1_right', 'tarsus_T1_right'
+        "coxa_abduct_T1_left", "coxa_twist_T1_left", "coxa_T1_left",
+        "femur_twist_T1_left", "femur_T1_left", "tibia_T1_left",
+        "tarsus_T1_left", "coxa_abduct_T1_right", "coxa_twist_T1_right",
+        "coxa_T1_right", "femur_twist_T1_right", "femur_T1_right",
+        "tibia_T1_right", "tarsus_T1_right"
     ]
     mocap_site_names = [
-        'tarsus_T1_left', 'tarsus_T1_right',
-        'tarsus_T2_left', 'tarsus_T2_right',
-        'tarsus_T3_left', 'tarsus_T3_right',
+        "tarsus_T1_left", "tarsus_T1_right",
+        "tarsus_T2_left", "tarsus_T2_right",
+        "tarsus_T3_left", "tarsus_T3_right",
     ]
 
     walk_loader = SyntheticWalkingLoader(mocap_joint_names, mocap_site_names)
@@ -165,18 +183,22 @@ def build_environment():
     return env
 
 
-def rollout(env, control_phase: np.ndarray | None = None):
+# -----------------------------------------------------------------------------
+# Rollout with optional video capture
+# -----------------------------------------------------------------------------
+def rollout(env, control_phase: np.ndarray | None = None, save_video: bool = True, fps: int = 60):
     action_spec = env.action_spec()
-
     timestep = env.reset()
     physics = env.physics
+
+    frames = []
     data = {
-        'time': [physics.time()],
-        'mode': [0.0],
-        'com_ref_z': [env.task._ref_qpos[0, 2]],
-        'com_model_z': [physics.named.data.subtree_com['walker/', 2]],
-        'x_ref': [env.task._ref_qpos[0, 0]],
-        'x_model': [physics.named.data.subtree_com['walker/', 0]],
+        "time": [physics.time()],
+        "mode": [0.0],
+        "com_ref_z": [env.task._ref_qpos[0, 2]],
+        "com_model_z": [physics.named.data.subtree_com["walker/", 2]],
+        "x_ref": [env.task._ref_qpos[0, 0]],
+        "x_model": [physics.named.data.subtree_com["walker/", 0]],
     }
 
     step = 0
@@ -191,49 +213,86 @@ def rollout(env, control_phase: np.ndarray | None = None):
         timestep = env.step(action)
         step += 1
 
-        data['time'].append(physics.time())
-        data['mode'].append(env.task._current_phase.phase == 'flight')
-        data['com_ref_z'].append(env.task._ref_qpos[min(step, env.task._combined_steps), 2])
-        data['com_model_z'].append(
-            physics.named.data.subtree_com['walker/', 2])
-        data['x_ref'].append(env.task._ref_qpos[min(step, env.task._combined_steps), 0])
-        data['x_model'].append(
-            physics.named.data.subtree_com['walker/', 0])
+        data["time"].append(physics.time())
+        data["mode"].append(env.task._current_phase.phase == "flight")
+        idx = min(step, env.task._combined_steps)
+        data["com_ref_z"].append(env.task._ref_qpos[idx, 2])
+        data["com_model_z"].append(physics.named.data.subtree_com["walker/", 2])
+        data["x_ref"].append(env.task._ref_qpos[idx, 0])
+        data["x_model"].append(physics.named.data.subtree_com["walker/", 0])
+
+        # Save rendered frame every few steps
+        if save_video and step % 2 == 0:
+            frame = physics.render(height=480, width=640, camera_id=1)
+            frames.append(frame)
+
+    if save_video and frames:
+        video_path = os.path.join(REPO_ROOT, "docs", "videos", "mixed_demo.mp4")
+        os.makedirs(os.path.dirname(video_path), exist_ok=True)
+        imageio.mimsave(video_path, frames, fps=fps)
+        print(f"[INFO] Saved rollout video to {video_path}")
 
     return data
 
 
-def plot_results(data: dict[str, list[float]], output_path: str):
+# -----------------------------------------------------------------------------
+# Plotting utilities
+# -----------------------------------------------------------------------------
+def plot_results(data: dict[str, list[float]], output_path: str, switch_step: int | None = None):
     fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
 
-    axes[0].plot(data['time'], data['x_ref'], label='Reference COM x')
-    axes[0].plot(data['time'], data['x_model'], label='Walker COM x')
-    axes[0].set_ylabel('x position (m)')
-    axes[0].legend(loc='upper left')
+    axes[0].plot(data["time"], data["x_ref"], label="Reference COM x")
+    axes[0].plot(data["time"], data["x_model"], label="Walker COM x")
+    axes[0].set_ylabel("x position (m)")
+    axes[0].legend(loc="upper left")
 
-    axes[1].plot(data['time'], data['com_ref_z'], label='Reference COM z')
-    axes[1].plot(data['time'], data['com_model_z'], label='Walker COM z')
-    axes[1].fill_between(data['time'], 0, 1,
-                         where=np.asarray(data['mode']) > 0.5,
+    axes[1].plot(data["time"], data["com_ref_z"], label="Reference COM z")
+    axes[1].plot(data["time"], data["com_model_z"], label="Walker COM z")
+    axes[1].fill_between(data["time"], 0, 1,
+                         where=np.asarray(data["mode"]) > 0.5,
                          alpha=0.2, transform=axes[1].get_xaxis_transform(),
-                         color='tab:orange', label='Flight phase')
-    axes[1].set_ylabel('z position (m)')
-    axes[1].set_xlabel('Time (s)')
-    axes[1].legend(loc='upper left')
+                         color="tab:orange", label="Flight phase")
+    if switch_step is not None:
+        axes[1].axvline(x=data["time"][switch_step], color="red", linestyle="--", alpha=0.6, label="Mode switch")
+
+    axes[1].set_ylabel("z position (m)")
+    axes[1].set_xlabel("Time (s)")
+    axes[1].legend(loc="upper left")
 
     fig.tight_layout()
     fig.savefig(output_path)
     plt.close(fig)
+    print(f"[INFO] Saved plot to {output_path}")
 
 
+def plot_com_3d(data: dict[str, list[float]], output_path: str):
+    fig = plt.figure(figsize=(6, 5))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot(data["x_model"], np.zeros_like(data["x_model"]), data["com_model_z"], label="Walker COM")
+    ax.plot(data["x_ref"], np.zeros_like(data["x_ref"]), data["com_ref_z"], "--", label="Reference")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_zlabel("z (m)")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"[INFO] Saved 3D COM plot to {output_path}")
+
+
+# -----------------------------------------------------------------------------
+# Main entry
+# -----------------------------------------------------------------------------
 def main():
     env = build_environment()
-    data = rollout(env)
-    output_path = os.path.join(REPO_ROOT, 'docs', 'images', 'mixed_demo.png')
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plot_results(data, output_path)
-    print(f"Saved demo plot to {os.path.abspath(output_path)}")
+    data = rollout(env, save_video=True)
+    output_img_dir = os.path.join(REPO_ROOT, "docs", "images")
+    os.makedirs(output_img_dir, exist_ok=True)
+    plot_results(data, os.path.join(output_img_dir, "mixed_demo.png"),
+                 switch_step=env.task._walk_steps)
+    plot_com_3d(data, os.path.join(output_img_dir, "mixed_demo_3d.png"))
+    print("[DONE] All visualizations saved in docs/images and docs/videos.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
